@@ -5,6 +5,11 @@ existing AgentRun-compatible control plane. Kubernetes owns desired state and a 
 status summary; PostgreSQL remains the system of record for execution events,
 results, and idempotency.
 
+For the first MVP, this repository also includes a small FastAPI data plane in
+`backend/`. It implements the Operator HTTP contract and runs deterministic
+mock tasks in memory. It is intentionally a demo component: runs do not survive
+an API restart and it does not call a model provider yet.
+
 The module's external interface is the three CRDs. Internally, controllers use
 one `RunGateway` interface. The production adapter calls FastAPI; tests use an
 in-memory adapter. The Operator never starts Node/Python runtimes itself.
@@ -22,16 +27,25 @@ Regenerate checked-in CRDs, RBAC, and deep-copy code after changing API types:
 make generate manifests
 ```
 
+Run the data-plane tests and build both local images:
+
+```bash
+make api-test
+make docker-build docker-build-api
+```
+
 ## PoC deployment
 
-1. Build and load `ghcr.io/6riemann9/governed-agent-control-plane:dev` into the test cluster.
-2. Set `config/manager/manager.yaml` `apiUrl` to the cluster-internal FastAPI
-   endpoint. Create `governed-agent-operator-credentials` with a `token` key when auth
-   is enabled; never place the token in a CR.
-3. Run `kubectl apply -k config/default`.
-4. Replace the sample tenant/project UUIDs with IDs created by FastAPI, then
+1. Build and load `ghcr.io/6riemann9/governed-agent-control-plane:dev` and
+   `governed-agent-api:dev` into the test cluster.
+2. Run `kubectl apply -k config/default`. It creates the API Service named
+   `agent-control-api`; the Operator points to it by default.
+3. Replace the sample tenant/project UUIDs with IDs created by FastAPI, then
    apply `config/samples/tenant.yaml`, `agent.yaml`, and `agentrun.yaml` in that
    order.
+
+Within a few seconds, `kubectl get agentrun research-example -n tenant-acme -o yaml`
+will show a `Succeeded` status and compact per-node result references.
 
 `agents.governed.io/tenant-id` is mandatory on the Namespace and all three resources;
 the values must match. Tenant users should not have permission to relabel their

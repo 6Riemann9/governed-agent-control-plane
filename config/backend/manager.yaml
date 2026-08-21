@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-control-api
+  labels:
+    app.kubernetes.io/name: agent-control-api
+    app.kubernetes.io/part-of: governed-agent-control
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agent-control-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agent-control-api
+        app.kubernetes.io/part-of: governed-agent-control
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: governed-agent-api:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-control-api
+  labels:
+    app.kubernetes.io/name: agent-control-api
+spec:
+  selector:
+    app.kubernetes.io/name: agent-control-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

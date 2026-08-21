@@ -18,7 +18,8 @@ permissions:
   id-token: write
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/governed-agent-control-plane
+  OPERATOR_IMAGE: ghcr.io/${{ github.repository_owner }}/governed-agent-control-plane
+  API_IMAGE: ghcr.io/${{ github.repository_owner }}/governed-agent-api
 
 jobs:
   publish:
@@ -50,8 +51,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
-        id: build
+      - name: Build and push Operator
+        id: operator
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -59,23 +60,47 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ env.IMAGE_NAME }}:${{ steps.release.outputs.tag }}
-            ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+            ${{ env.OPERATOR_IMAGE }}:${{ steps.release.outputs.tag }}
+            ${{ env.OPERATOR_IMAGE }}:sha-${{ github.sha }}
           provenance: mode=max
           sbom: true
 
-      - name: Attest build provenance
+      - name: Build and push API
+        id: api
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.API_IMAGE }}:${{ steps.release.outputs.tag }}
+            ${{ env.API_IMAGE }}:sha-${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Attest Operator build provenance
         uses: actions/attest-build-provenance@v2
         with:
-          subject-name: ${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-name: ${{ env.OPERATOR_IMAGE }}
+          subject-digest: ${{ steps.operator.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest API build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.API_IMAGE }}
+          subject-digest: ${{ steps.api.outputs.digest }}
           push-to-registry: true
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
 
-      - name: Keyless-sign image digest
+      - name: Keyless-sign image digests
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "${IMAGE_NAME}@${DIGEST}"
+          OPERATOR_DIGEST: ${{ steps.operator.outputs.digest }}
+          API_DIGEST: ${{ steps.api.outputs.digest }}
+        run: |
+          cosign sign --yes "${OPERATOR_IMAGE}@${OPERATOR_DIGEST}"
+          cosign sign --yes "${API_IMAGE}@${API_DIGEST}"
 

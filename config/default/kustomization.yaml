@@ -5,6 +5,7 @@ resources:
   - namespace.yaml
   - ../crd
   - ../rbac
+  - ../backend
   - ../manager
   - ../network
 

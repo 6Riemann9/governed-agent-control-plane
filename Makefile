@@ -1,7 +1,8 @@
 CONTROLLER_GEN ?= go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.17.2
 IMAGE ?= ghcr.io/6riemann9/governed-agent-control-plane:dev
+API_IMAGE ?= governed-agent-api:dev
 
-.PHONY: generate manifests test build docker-build install uninstall deploy undeploy helm-lint helm-template
+.PHONY: generate manifests test api-test build docker-build docker-build-api install uninstall deploy undeploy helm-lint helm-template
 
 generate:
 	$(CONTROLLER_GEN) object paths=./api/v1alpha1
@@ -13,11 +14,17 @@ manifests:
 test: generate manifests
 	go test ./...
 
+api-test:
+	PYTHONPATH=backend python -m unittest discover -s backend/tests -p 'test_*.py'
+
 build:
 	go build -o bin/operator ./cmd
 
 docker-build:
 	docker build -t $(IMAGE) .
+
+docker-build-api:
+	docker build -t $(API_IMAGE) backend
 
 install:
 	kubectl apply -k config/crd
