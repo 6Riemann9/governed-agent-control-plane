@@ -1,0 +1,222 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  name: agents.agents.governed.io
+spec:
+  group: agents.governed.io
+  names:
+    kind: Agent
+    listKind: AgentList
+    plural: agents
+    shortNames:
+    - eqagent
+    singular: agent
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Agent is the Schema for the agents API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: AgentSpec defines the desired state of an Agent.
+            properties:
+              budget:
+                description: Budget declares budgets.
+                properties:
+                  maxConcurrentRuns:
+                    description: MaxConcurrentRuns caps concurrent executions.
+                    minimum: 1
+                    type: integer
+                  maxRunsPerDay:
+                    description: MaxRunsPerDay caps runs per day.
+                    minimum: 1
+                    type: integer
+                  maxTokensPerRun:
+                    description: MaxTokensPerRun caps total tokens per run.
+                    minimum: 1
+                    type: integer
+                type: object
+              displayName:
+                description: DisplayName is the human-readable agent name.
+                type: string
+              model:
+                description: Model declares the handler model.
+                properties:
+                  maxTokens:
+                    description: MaxTokens caps output tokens per request.
+                    minimum: 1
+                    type: integer
+                  model:
+                    description: Model is the model identifier (e.g. "deepseek-chat").
+                    minLength: 1
+                    type: string
+                  providerRef:
+                    description: ProviderRef references a provider config (e.g. "deepseek-prod").
+                    minLength: 1
+                    type: string
+                required:
+                - model
+                - providerRef
+                type: object
+              policyRef:
+                description: PolicyRef references a TenantPolicy by name.
+                type: string
+              projectId:
+                description: ProjectID binds all runs for this Agent to an Governed
+                  Agent project.
+                format: uuid
+                type: string
+              runtime:
+                description: Runtime declares the execution runtime.
+                properties:
+                  engine:
+                    default: governed
+                    description: Engine is the runtime engine, default "governed".
+                    enum:
+                    - governed
+                    type: string
+                  image:
+                    description: Image is the executor image for sandboxed runs.
+                    type: string
+                  role:
+                    description: Role is the agent role (analyst/researcher/etc).
+                    type: string
+                type: object
+              sandbox:
+                description: Sandbox declares isolation requirements.
+                properties:
+                  idleTimeoutSeconds:
+                    description: IdleTimeoutSeconds before hibernating the sandbox.
+                    minimum: 30
+                    type: integer
+                  mode:
+                    description: 'Mode: "required" | "optional" | "disabled".'
+                    enum:
+                    - required
+                    - optional
+                    - disabled
+                    type: string
+                  networkEgress:
+                    description: NetworkEgress lists allowed egress targets (gateways).
+                    items:
+                      type: string
+                    type: array
+                  persistentVolumeSizeGi:
+                    description: PersistentVolumeSizeGi for durable worktrees.
+                    minimum: 1
+                    type: integer
+                  runtimeClassName:
+                    description: RuntimeClassName selects gVisor/Kata etc.
+                    type: string
+                type: object
+              tools:
+                description: Tools lists allowed tool references.
+                items:
+                  description: ToolRef references a tool by name, optionally overridable.
+                  properties:
+                    ref:
+                      description: Ref is the tool identifier (e.g. "rag-search",
+                        "memory-recall").
+                      minLength: 1
+                      type: string
+                  required:
+                  - ref
+                  type: object
+                type: array
+            required:
+            - projectId
+            type: object
+          status:
+            description: AgentStatus defines the observed state of an Agent.
+            properties:
+              conditions:
+                description: Conditions convey detailed status.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              observedGeneration:
+                description: ObservedGeneration tracks the last processed generation.
+                format: int64
+                type: integer
+              ready:
+                description: Ready is true when the agent can accept runs.
+                type: boolean
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

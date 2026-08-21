@@ -1,0 +1,72 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/6riemann9/governed-agent-control-plane
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+rbac:
+  create: true
+
+api:
+  # Cluster-internal URL of the FastAPI control plane. It must be reachable
+  # through the NetworkPolicy below.
+  url: http://agent-control-api:8000
+
+credentials:
+  # Reference an already-created Secret. The chart deliberately never accepts
+  # a plaintext API token in values or renders a Secret from one.
+  existingSecret: ""
+  tokenKey: token
+
+leaderElection: true
+
+metrics:
+  service:
+    enabled: true
+    type: ClusterIP
+    port: 8080
+  serviceMonitor:
+    # Requires the Prometheus Operator ServiceMonitor CRD. It is disabled by
+    # default so a plain Kubernetes cluster can install this chart unchanged.
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+
+networkPolicy:
+  enabled: true
+  metricsNamespace: monitoring
+  dnsNamespace: kube-system
+  dnsSelector:
+    k8s-app: kube-dns
+  backend:
+    # Empty means the Governed Agent backend runs in this release namespace.
+    namespace: ""
+    selector:
+      app.kubernetes.io/name: agent-control-api
+    port: 8000
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+

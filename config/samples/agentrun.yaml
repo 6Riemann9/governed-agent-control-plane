@@ -1,0 +1,21 @@
+apiVersion: agents.governed.io/v1alpha1
+kind: AgentRun
+metadata:
+  name: research-example
+  namespace: tenant-acme
+  labels:
+    agents.governed.io/tenant-id: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
+spec:
+  agentRef: research-agent
+  input:
+    task: 比较两种检索策略并给出证据
+  dag:
+    nodes:
+      - name: retrieve
+        role: researcher
+      - name: review
+        role: analyst
+        dependsOn: ["retrieve"]
+  retryPolicy:
+    maxAttempts: 2
+  ttlSecondsAfterFinished: 86400

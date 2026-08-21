@@ -1,0 +1,26 @@
+apiVersion: agents.governed.io/v1alpha1
+kind: Agent
+metadata:
+  name: research-agent
+  namespace: tenant-acme
+  labels:
+    agents.governed.io/tenant-id: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
+spec:
+  displayName: Research Agent
+  projectId: bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb
+  policyRef: standard
+  runtime:
+    engine: governed
+    role: analyst
+  model:
+    providerRef: mock
+    model: mock
+    maxTokens: 4096
+  tools:
+    - ref: rag-search
+    - ref: memory-recall
+  sandbox:
+    mode: optional
+  budget:
+    maxConcurrentRuns: 4
+    maxTokensPerRun: 12000

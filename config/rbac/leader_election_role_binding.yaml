@@ -1,0 +1,13 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: governed-agent-operator-leader-election
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: governed-agent-operator-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: governed-agent-operator
+    namespace: agent-control-system
+

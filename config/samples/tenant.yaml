@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-acme
+  labels:
+    agents.governed.io/tenant-id: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: agents.governed.io/v1alpha1
+kind: TenantPolicy
+metadata:
+  name: standard
+  namespace: tenant-acme
+  labels:
+    agents.governed.io/tenant-id: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
+spec:
+  policyVersion: "2026-08-21.1"
+  allowedTools: ["rag-search", "memory-recall"]
+  allowedModels: ["mock/mock"]
+  approvalLevel: human
+  network:
+    defaultDenyEgress: true
+    egressAllowed: ["llm-gateway", "mcp-gateway"]
+  budget:
+    maxConcurrentRuns: 4
+    maxTokensPerDay: 100000
+    maxRunsPerDay: 100

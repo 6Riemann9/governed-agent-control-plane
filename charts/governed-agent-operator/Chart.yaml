@@ -1,0 +1,17 @@
+apiVersion: v2
+name: governed-agent-operator
+description: Declarative control plane for governed Agent and AgentRun workloads
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - governed-agents
+  - agent
+  - operator
+  - kubernetes
+home: https://github.com/6Riemann9/governed-agent-control-plane
+sources:
+  - https://github.com/6Riemann9/governed-agent-control-plane
+maintainers:
+  - name: 6Riemann9
+

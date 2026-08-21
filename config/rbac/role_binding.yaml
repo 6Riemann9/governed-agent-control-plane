@@ -1,0 +1,13 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: governed-agent-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: governed-agent-operator
+subjects:
+  - kind: ServiceAccount
+    name: governed-agent-operator
+    namespace: agent-control-system
+
