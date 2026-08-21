@@ -7,8 +7,8 @@ results, and idempotency.
 
 For the first MVP, this repository also includes a small FastAPI data plane in
 `backend/`. It implements the Operator HTTP contract, persists run and node
-state to PostgreSQL, and runs deterministic mock tasks. It does not call a model
-provider yet.
+state to PostgreSQL, and runs deterministic mock tasks by default. An opt-in
+xindu overlay enables OpenAI-compatible model calls for live demonstrations.
 
 The module's external interface is the three CRDs. Internally, controllers use
 one `RunGateway` interface. The production adapter calls FastAPI; tests use an

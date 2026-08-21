@@ -149,7 +149,7 @@ class InMemoryRunStore:
             if not record or record["tenant_id"] != tenant_id or record["cancelled"]:
                 return False
             record["status"] = "succeeded"
-            record["summary"] = "mock execution completed"
+            record["summary"] = "execution completed"
             return True
 
     def fail(self, tenant_id: str, run_id: str, error: str) -> bool:
@@ -333,7 +333,7 @@ class PostgresRunStore:
             self._set_tenant(connection, tenant_id)
             updated = connection.execute(
                 """
-                UPDATE agent_runs SET status = 'succeeded', summary = 'mock execution completed', finished_at = now()
+                UPDATE agent_runs SET status = 'succeeded', summary = 'execution completed', finished_at = now()
                 WHERE id = %s AND tenant_id = %s AND cancelled = false AND status = 'running'
                 RETURNING id
                 """,
