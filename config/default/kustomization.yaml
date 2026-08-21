@@ -5,6 +5,7 @@ resources:
   - namespace.yaml
   - ../crd
   - ../rbac
+  - ../postgres
   - ../backend
   - ../manager
   - ../network

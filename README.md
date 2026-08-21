@@ -6,9 +6,9 @@ status summary; PostgreSQL remains the system of record for execution events,
 results, and idempotency.
 
 For the first MVP, this repository also includes a small FastAPI data plane in
-`backend/`. It implements the Operator HTTP contract and runs deterministic
-mock tasks in memory. It is intentionally a demo component: runs do not survive
-an API restart and it does not call a model provider yet.
+`backend/`. It implements the Operator HTTP contract, persists run and node
+state to PostgreSQL, and runs deterministic mock tasks. It does not call a model
+provider yet.
 
 The module's external interface is the three CRDs. Internally, controllers use
 one `RunGateway` interface. The production adapter calls FastAPI; tests use an
@@ -33,6 +33,24 @@ Run the data-plane tests and build both local images:
 make api-test
 make docker-build docker-build-api
 ```
+
+## Local Kubernetes database
+
+The Kustomize deployment requires an existing `governed-database` Secret. Create
+one locally without committing its password:
+
+```powershell
+$password = [guid]::NewGuid().ToString("N")
+$url = "postgresql://governed:${password}@governed-postgres:5432/governed"
+kubectl -n agent-control-system create secret generic governed-database `
+  --from-literal=username=governed `
+  --from-literal=password=$password `
+  --from-literal=url=$url
+```
+
+Then run `kubectl apply -k config/default`. PostgreSQL is an internal ClusterIP
+StatefulSet with a 5Gi persistent volume. The API applies versioned SQL
+migrations under `backend/migrations/` while holding a PostgreSQL advisory lock.
 
 ## PoC deployment
 
