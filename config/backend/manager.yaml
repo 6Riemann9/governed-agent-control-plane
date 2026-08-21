@@ -27,6 +27,22 @@ spec:
           env:
             - name: RUN_STORE
               value: postgres
+            - name: EXECUTION_MODE
+              value: mock
+            - name: LLM_BASE_URL
+              value: https://xindu.xyz/v1
+            - name: LLM_MODEL
+              value: deepseek-v4-flash
+            - name: LLM_MAX_TOKENS
+              value: "512"
+            - name: LLM_TIMEOUT_SECONDS
+              value: "45"
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: governed-llm
+                  key: api-key
+                  optional: true
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

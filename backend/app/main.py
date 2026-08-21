@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
+from app.llm import Completion, LLMError, OpenAICompatibleExecutor
 from app.store import InMemoryRunStore, PostgresRunStore
 
 
@@ -59,20 +60,72 @@ def require_tenant(tenant_id: str | None) -> str:
     return tenant_id
 
 
-def execute_mock(tenant_id: str, run_id: str) -> None:
+def build_executor() -> OpenAICompatibleExecutor | None:
+    mode = os.getenv("EXECUTION_MODE", "mock")
+    if mode == "mock":
+        return None
+    if mode != "live":
+        raise RuntimeError("EXECUTION_MODE must be 'mock' or 'live'")
+    api_key = os.getenv("LLM_API_KEY")
+    if not api_key:
+        raise LLMError("live execution is enabled but LLM_API_KEY is not configured")
+    return OpenAICompatibleExecutor(
+        os.getenv("LLM_BASE_URL", "https://xindu.xyz/v1"),
+        api_key,
+        os.getenv("LLM_MODEL", "deepseek-v4-flash"),
+        int(os.getenv("LLM_MAX_TOKENS", "512")),
+        int(os.getenv("LLM_TIMEOUT_SECONDS", "45")),
+    )
+
+
+def execute_run(tenant_id: str, run_id: str, task: str) -> None:
     time.sleep(0.02)
     if not store.start(tenant_id, run_id):
         return
     run = store.get(tenant_id, run_id)
     if run is None:
         return
+    try:
+        executor = build_executor()
+    except LLMError as error:
+        store.fail(tenant_id, run_id, str(error))
+        return
     for position in range(len(run["steps"])):
         if not store.start_step(tenant_id, run_id, position):
             return
-        time.sleep(0.02)
-        if not store.succeed_step(tenant_id, run_id, position):
+        step = run["steps"][position]
+        started = time.monotonic()
+        try:
+            completion = _complete(executor, task, step["node_id"], run["steps"][:position])
+        except LLMError as error:
+            store.fail_step(tenant_id, run_id, position, str(error))
+            store.fail(tenant_id, run_id, str(error))
+            return
+        latency_ms = max(1, int((time.monotonic() - started) * 1000))
+        if not store.succeed_step(
+            tenant_id,
+            run_id,
+            position,
+            completion.content,
+            latency_ms,
+            completion.input_tokens,
+            completion.output_tokens,
+        ):
             return
     store.succeed(tenant_id, run_id)
+
+
+def _complete(
+    executor: OpenAICompatibleExecutor | None,
+    task: str,
+    node_name: str,
+    completed_steps: list[dict[str, Any]],
+) -> Completion:
+    if executor is None:
+        time.sleep(0.02)
+        return Completion(f"mock execution completed step {node_name}", 0, 0)
+    prior_output = "\n\n".join(step["output"] for step in completed_steps if step["output"])
+    return executor.complete(task, node_name, prior_output)
 
 
 @app.get("/health")
@@ -94,7 +147,7 @@ async def submit_run(
         [node.name for node in request.nodes] or ["run"],
     )
     if created:
-        Thread(target=execute_mock, args=(tenant, run["id"]), daemon=True).start()
+        Thread(target=execute_run, args=(tenant, run["id"], request.task), daemon=True).start()
     return {"run": run}
 
 

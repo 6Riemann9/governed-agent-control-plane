@@ -52,6 +52,27 @@ Then run `kubectl apply -k config/default`. PostgreSQL is an internal ClusterIP
 StatefulSet with a 5Gi persistent volume. The API applies versioned SQL
 migrations under `backend/migrations/` while holding a PostgreSQL advisory lock.
 
+## xindu live model mode
+
+The default deployment remains in deterministic `mock` mode. The xindu overlay
+switches the API to OpenAI-compatible live calls using
+`https://xindu.xyz/v1` and `deepseek-v4-flash`. Keep the key out of shell
+history and source control:
+
+```powershell
+$apiKey = Read-Host "xindu API key"
+kubectl -n agent-control-system create secret generic governed-llm `
+  --from-literal=api-key=$apiKey `
+  --dry-run=client -o yaml | kubectl apply -f -
+Remove-Variable apiKey
+kubectl apply -k config/overlays/xindu
+```
+
+The API records each node's output, latency, input tokens and output tokens in
+PostgreSQL. Provider errors are stored as compact status messages and never
+include the API key or raw provider response body. To return to safe mock mode,
+apply `kubectl apply -k config/default`.
+
 ## PoC deployment
 
 1. Build and load `ghcr.io/6riemann9/governed-agent-control-plane:dev` and

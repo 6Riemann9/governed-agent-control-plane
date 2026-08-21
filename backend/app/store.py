@@ -65,6 +65,8 @@ class InMemoryRunStore:
                         "output": "",
                         "error": "",
                         "latency_ms": 0,
+                        "input_tokens": 0,
+                        "output_tokens": 0,
                     }
                     for node_name in node_names
                 ],
@@ -109,15 +111,36 @@ class InMemoryRunStore:
             record["steps"][position]["status"] = "running"
             return True
 
-    def succeed_step(self, tenant_id: str, run_id: str, position: int) -> bool:
+    def succeed_step(
+        self,
+        tenant_id: str,
+        run_id: str,
+        position: int,
+        output: str | None = None,
+        latency_ms: int = 20,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+    ) -> bool:
         with self._lock:
             record = self._runs.get(run_id)
             if not record or record["tenant_id"] != tenant_id or record["cancelled"]:
                 return False
             step = record["steps"][position]
             step["status"] = "succeeded"
-            step["output"] = f"mock execution completed step {step['node_id']}"
-            step["latency_ms"] = 20
+            step["output"] = output or f"mock execution completed step {step['node_id']}"
+            step["latency_ms"] = latency_ms
+            step["input_tokens"] = input_tokens
+            step["output_tokens"] = output_tokens
+            return True
+
+    def fail_step(self, tenant_id: str, run_id: str, position: int, error: str) -> bool:
+        with self._lock:
+            record = self._runs.get(run_id)
+            if not record or record["tenant_id"] != tenant_id or record["cancelled"]:
+                return False
+            step = record["steps"][position]
+            step["status"] = "failed"
+            step["error"] = error
             return True
 
     def succeed(self, tenant_id: str, run_id: str) -> bool:
@@ -127,6 +150,18 @@ class InMemoryRunStore:
                 return False
             record["status"] = "succeeded"
             record["summary"] = "mock execution completed"
+            return True
+
+    def fail(self, tenant_id: str, run_id: str, error: str) -> bool:
+        with self._lock:
+            record = self._runs.get(run_id)
+            if not record or record["tenant_id"] != tenant_id or record["cancelled"]:
+                return False
+            record["status"] = "failed"
+            record["summary"] = error
+            for step in record["steps"]:
+                if step["status"] == "queued":
+                    step["status"] = "cancelled"
             return True
 
     def close(self) -> None:
@@ -236,13 +271,26 @@ class PostgresRunStore:
     def start_step(self, tenant_id: str, run_id: str, position: int) -> bool:
         return self._update_step(tenant_id, run_id, position, "running")
 
-    def succeed_step(self, tenant_id: str, run_id: str, position: int) -> bool:
+    def succeed_step(
+        self,
+        tenant_id: str,
+        run_id: str,
+        position: int,
+        output: str | None = None,
+        latency_ms: int = 20,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+    ) -> bool:
         with self.pool.connection() as connection:
             self._set_tenant(connection, tenant_id)
             updated = connection.execute(
                 """
                 UPDATE agent_run_steps AS step
-                SET status = 'succeeded', output = 'mock execution completed step ' || step.node_id, latency_ms = 20
+                SET status = 'succeeded',
+                    output = %s,
+                    latency_ms = %s,
+                    input_tokens = %s,
+                    output_tokens = %s
                 WHERE step.run_id = %s AND step.tenant_id = %s AND step.position = %s
                   AND EXISTS (
                     SELECT 1 FROM agent_runs run
@@ -250,7 +298,33 @@ class PostgresRunStore:
                   )
                 RETURNING position
                 """,
-                (run_id, tenant_id, position),
+                (output or self._mock_output(connection, tenant_id, run_id, position), latency_ms, input_tokens, output_tokens, run_id, tenant_id, position),
+            ).fetchone()
+            return updated is not None
+
+    @staticmethod
+    def _mock_output(connection: Any, tenant_id: str, run_id: str, position: int) -> str:
+        node = connection.execute(
+            "SELECT node_id FROM agent_run_steps WHERE run_id = %s AND tenant_id = %s AND position = %s",
+            (run_id, tenant_id, position),
+        ).fetchone()
+        return f"mock execution completed step {node['node_id']}"
+
+    def fail_step(self, tenant_id: str, run_id: str, position: int, error: str) -> bool:
+        with self.pool.connection() as connection:
+            self._set_tenant(connection, tenant_id)
+            updated = connection.execute(
+                """
+                UPDATE agent_run_steps SET status = 'failed', error = %s
+                WHERE run_id = %s AND tenant_id = %s AND position = %s
+                  AND EXISTS (
+                    SELECT 1 FROM agent_runs run
+                    WHERE run.id = agent_run_steps.run_id AND run.tenant_id = agent_run_steps.tenant_id
+                      AND run.cancelled = false
+                  )
+                RETURNING position
+                """,
+                (error, run_id, tenant_id, position),
             ).fetchone()
             return updated is not None
 
@@ -265,6 +339,27 @@ class PostgresRunStore:
                 """,
                 (run_id, tenant_id),
             ).fetchone()
+            return updated is not None
+
+    def fail(self, tenant_id: str, run_id: str, error: str) -> bool:
+        with self.pool.connection() as connection:
+            self._set_tenant(connection, tenant_id)
+            updated = connection.execute(
+                """
+                UPDATE agent_runs SET status = 'failed', summary = %s, finished_at = now()
+                WHERE id = %s AND tenant_id = %s AND cancelled = false AND status = 'running'
+                RETURNING id
+                """,
+                (error, run_id, tenant_id),
+            ).fetchone()
+            if updated:
+                connection.execute(
+                    """
+                    UPDATE agent_run_steps SET status = 'cancelled'
+                    WHERE run_id = %s AND tenant_id = %s AND status = 'queued'
+                    """,
+                    (run_id, tenant_id),
+                )
             return updated is not None
 
     def _update_run(self, tenant_id: str, run_id: str, status: str, summary: str) -> bool:
@@ -310,7 +405,7 @@ class PostgresRunStore:
             return None
         steps = connection.execute(
             """
-            SELECT node_id, status, output, error, latency_ms
+            SELECT node_id, status, output, error, latency_ms, input_tokens, output_tokens
             FROM agent_run_steps WHERE run_id = %s AND tenant_id = %s ORDER BY position
             """,
             (run_id, tenant_id),
