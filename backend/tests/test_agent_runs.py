@@ -1,8 +1,10 @@
 import time
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from app.llm import Completion, LLMError
 from app.main import app, store
 
 
@@ -63,3 +65,61 @@ class AgentRunApiTests(unittest.TestCase):
         )
         self.assertEqual(cancelled.status_code, 200)
         self.assertEqual(cancelled.json()["run"]["status"], "cancelled")
+
+    def test_dag_dependencies_control_execution_order(self):
+        seen = []
+
+        class RecordingExecutor:
+            def complete(self, task, node_name, prior_output):
+                seen.append((node_name, prior_output))
+                return Completion(f"done:{node_name}", 1, 1)
+
+        with patch("app.main.build_executor", return_value=RecordingExecutor()):
+            response = self._submit(
+                key="dag-order",
+                nodes=[
+                    {"name": "review", "dependsOn": ["draft"]},
+                    {"name": "draft"},
+                ],
+            )
+            run_id = response.json()["run"]["id"]
+            run = self._wait_for_terminal(run_id)
+
+        self.assertEqual(run["status"], "succeeded")
+        self.assertEqual([node for node, _ in seen], ["draft", "review"])
+        self.assertEqual(seen[1][1], "done:draft")
+
+    def test_provider_failure_retries_until_max_retries(self):
+        class FlakyExecutor:
+            def __init__(self):
+                self.calls = 0
+
+            def complete(self, task, node_name, prior_output):
+                self.calls += 1
+                if self.calls == 1:
+                    raise LLMError("HTTP 503")
+                return Completion("recovered", 2, 3)
+
+        executor = FlakyExecutor()
+        with patch("app.main.build_executor", return_value=executor):
+            response = self._submit(
+                key="retry-once",
+                nodes=[{"name": "draft", "maxRetries": 1}],
+            )
+            run_id = response.json()["run"]["id"]
+            run = self._wait_for_terminal(run_id)
+
+        self.assertEqual(run["status"], "succeeded")
+        self.assertEqual(executor.calls, 2)
+        self.assertEqual(run["steps"][0]["attempts"], 2)
+        self.assertEqual(run["steps"][0]["output"], "recovered")
+
+    def _wait_for_terminal(self, run_id):
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            result = self.client.get(f"/api/agent-runs/{run_id}", headers=self.headers)
+            run = result.json()["run"]
+            if run["status"] in {"succeeded", "failed", "cancelled"}:
+                return run
+            time.sleep(0.02)
+        self.fail(f"run {run_id} did not reach a terminal state")

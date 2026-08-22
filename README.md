@@ -70,8 +70,9 @@ kubectl apply -k config/overlays/xindu
 
 The API records each node's output, latency, input tokens and output tokens in
 PostgreSQL. Provider errors are stored as compact status messages and never
-include the API key or raw provider response body. To return to safe mock mode,
-apply `kubectl apply -k config/default`.
+include the API key or raw provider response body. DAG dependencies are validated
+at the API boundary and executed topologically; each node honors its retry
+budget. To return to safe mock mode, apply `kubectl apply -k config/default`.
 
 ## PoC deployment
 

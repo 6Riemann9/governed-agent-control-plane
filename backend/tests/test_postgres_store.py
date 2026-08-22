@@ -36,3 +36,20 @@ class PostgresRunStoreTests(unittest.TestCase):
         cancelled = self.store.cancel(tenant, run["id"])
         self.assertEqual(cancelled["status"], "cancelled")
         self.assertEqual(self.store.get(tenant, run["id"])["steps"][0]["status"], "cancelled")
+
+    def test_dag_and_retry_metadata_persists(self):
+        tenant = "postgres-dag-tenant"
+        run, _ = self.store.submit(
+            tenant,
+            "dag task",
+            None,
+            "postgres-dag-key",
+            [
+                {"node_id": "review", "depends_on": ["draft"], "max_retries": 2},
+                {"node_id": "draft", "depends_on": [], "max_retries": 0},
+            ],
+        )
+        steps = self.store.get(tenant, run["id"])["steps"]
+        self.assertEqual(steps[0]["depends_on"], ["draft"])
+        self.assertEqual(steps[0]["max_retries"], 2)
+        self.assertEqual(steps[0]["attempts"], 0)

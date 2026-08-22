@@ -90,29 +90,74 @@ def execute_run(tenant_id: str, run_id: str, task: str) -> None:
     except LLMError as error:
         store.fail(tenant_id, run_id, str(error))
         return
-    for position in range(len(run["steps"])):
-        if not store.start_step(tenant_id, run_id, position):
-            return
+    order = _topological_order(run["steps"])
+    if order is None:
+        store.fail(tenant_id, run_id, "invalid DAG: duplicate, unknown, or cyclic dependency")
+        return
+    completed_steps = []
+    for position in order:
         step = run["steps"][position]
-        started = time.monotonic()
-        try:
-            completion = _complete(executor, task, step["node_id"], run["steps"][:position])
-        except LLMError as error:
-            store.fail_step(tenant_id, run_id, position, str(error))
-            store.fail(tenant_id, run_id, str(error))
-            return
-        latency_ms = max(1, int((time.monotonic() - started) * 1000))
-        if not store.succeed_step(
-            tenant_id,
-            run_id,
-            position,
-            completion.content,
-            latency_ms,
-            completion.input_tokens,
-            completion.output_tokens,
-        ):
-            return
+        max_retries = int(step.get("max_retries", 0))
+        attempts = int(step.get("attempts", 0))
+        while True:
+            if not store.start_step(tenant_id, run_id, position):
+                return
+            attempts += 1
+            started = time.monotonic()
+            try:
+                completion = _complete(executor, task, step["node_id"], completed_steps)
+            except LLMError as error:
+                store.fail_step(tenant_id, run_id, position, str(error))
+                if attempts <= max_retries:
+                    continue
+                store.fail(tenant_id, run_id, str(error))
+                return
+            latency_ms = max(1, int((time.monotonic() - started) * 1000))
+            if not store.succeed_step(
+                tenant_id,
+                run_id,
+                position,
+                completion.content,
+                latency_ms,
+                completion.input_tokens,
+                completion.output_tokens,
+            ):
+                return
+            step["status"] = "succeeded"
+            step["attempts"] = attempts
+            step["output"] = completion.content
+            completed_steps.append(step)
+            break
     store.succeed(tenant_id, run_id)
+
+
+def _topological_order(steps: list[dict[str, Any]]) -> list[int] | None:
+    positions = {}
+    for position, step in enumerate(steps):
+        node_id = step["node_id"]
+        if node_id in positions:
+            return None
+        positions[node_id] = position
+    indegree = [0] * len(steps)
+    dependents = [[] for _ in steps]
+    for position, step in enumerate(steps):
+        dependencies = step.get("depends_on", [])
+        for dependency in dependencies:
+            dependency_position = positions.get(dependency)
+            if dependency_position is None:
+                return None
+            indegree[position] += 1
+            dependents[dependency_position].append(position)
+    ready = [position for position, count in enumerate(indegree) if count == 0]
+    order = []
+    while ready:
+        position = ready.pop(0)
+        order.append(position)
+        for dependent in dependents[position]:
+            indegree[dependent] -= 1
+            if indegree[dependent] == 0:
+                ready.append(dependent)
+    return order if len(order) == len(steps) else None
 
 
 def _complete(
@@ -139,12 +184,25 @@ async def submit_run(
     tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
 ) -> dict[str, Any]:
     tenant = require_tenant(tenant_id)
+    step_specs = [
+        {
+            "node_id": node.name,
+            "depends_on": node.dependsOn,
+            "max_retries": node.maxRetries or 0,
+        }
+        for node in request.nodes
+    ] or [{"node_id": "run", "depends_on": [], "max_retries": 0}]
+    if _topological_order(step_specs) is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="nodes must have unique names and valid acyclic dependencies",
+        )
     run, created = store.submit(
         tenant,
         request.task,
         request.project_id,
         request.idempotency_key,
-        [node.name for node in request.nodes] or ["run"],
+        step_specs,
     )
     if created:
         Thread(target=execute_run, args=(tenant, run["id"], request.task), daemon=True).start()

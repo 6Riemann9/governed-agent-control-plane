@@ -14,6 +14,24 @@ from psycopg_pool import ConnectionPool
 TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
 
 
+def _normalize_step_specs(step_specs: list[str | dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized = []
+    for spec in step_specs:
+        if isinstance(spec, str):
+            normalized.append(
+                {"node_id": spec, "depends_on": [], "max_retries": 0}
+            )
+            continue
+        normalized.append(
+            {
+                "node_id": spec["node_id"],
+                "depends_on": list(spec.get("depends_on", [])),
+                "max_retries": int(spec.get("max_retries", 0)),
+            }
+        )
+    return normalized
+
+
 def _snapshot(record: dict[str, Any]) -> dict[str, Any]:
     return {
         key: [dict(step) for step in value] if key == "steps" else value
@@ -41,8 +59,9 @@ class InMemoryRunStore:
         task: str,
         project_id: str | None,
         idempotency_key: str,
-        node_names: list[str],
+        step_specs: list[str | dict[str, Any]],
     ) -> tuple[dict[str, Any], bool]:
+        steps = _normalize_step_specs(step_specs)
         key = (tenant_id, idempotency_key)
         with self._lock:
             if existing_id := self._idempotency.get(key):
@@ -54,13 +73,16 @@ class InMemoryRunStore:
                 "project_id": project_id,
                 "task": task,
                 "status": "queued",
-                "summary": "queued for mock execution",
+                "summary": "queued for execution",
                 "created_at": None,
                 "finished_at": None,
                 "cancelled": False,
                 "steps": [
                     {
-                        "node_id": node_name,
+                        "node_id": step["node_id"],
+                        "depends_on": step["depends_on"],
+                        "max_retries": step["max_retries"],
+                        "attempts": 0,
                         "status": "queued",
                         "output": "",
                         "error": "",
@@ -68,7 +90,7 @@ class InMemoryRunStore:
                         "input_tokens": 0,
                         "output_tokens": 0,
                     }
-                    for node_name in node_names
+                    for step in steps
                 ],
             }
             self._runs[run_id] = record
@@ -100,7 +122,7 @@ class InMemoryRunStore:
             if not record or record["tenant_id"] != tenant_id or record["cancelled"]:
                 return False
             record["status"] = "running"
-            record["summary"] = "mock execution running"
+            record["summary"] = "execution running"
             return True
 
     def start_step(self, tenant_id: str, run_id: str, position: int) -> bool:
@@ -108,7 +130,12 @@ class InMemoryRunStore:
             record = self._runs.get(run_id)
             if not record or record["tenant_id"] != tenant_id or record["cancelled"]:
                 return False
-            record["steps"][position]["status"] = "running"
+            step = record["steps"][position]
+            if step["status"] not in {"queued", "failed"}:
+                return False
+            step["status"] = "running"
+            step["attempts"] += 1
+            step["error"] = ""
             return True
 
     def succeed_step(
@@ -208,15 +235,16 @@ class PostgresRunStore:
         task: str,
         project_id: str | None,
         idempotency_key: str,
-        node_names: list[str],
+        step_specs: list[str | dict[str, Any]],
     ) -> tuple[dict[str, Any], bool]:
+        steps = _normalize_step_specs(step_specs)
         with self.pool.connection() as connection:
             self._set_tenant(connection, tenant_id)
             run_id = str(uuid4())
             inserted = connection.execute(
                 """
                 INSERT INTO agent_runs (id, tenant_id, project_id, idempotency_key, task, status, summary)
-                VALUES (%s, %s, %s, %s, %s, 'queued', 'queued for mock execution')
+                VALUES (%s, %s, %s, %s, %s, 'queued', 'queued for execution')
                 ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
                 RETURNING id
                 """,
@@ -226,10 +254,21 @@ class PostgresRunStore:
                 with connection.cursor() as cursor:
                     cursor.executemany(
                         """
-                        INSERT INTO agent_run_steps (run_id, tenant_id, position, node_id, status)
-                        VALUES (%s, %s, %s, %s, 'queued')
+                        INSERT INTO agent_run_steps
+                            (run_id, tenant_id, position, node_id, depends_on, max_retries, status)
+                        VALUES (%s, %s, %s, %s, %s, %s, 'queued')
                         """,
-                        [(run_id, tenant_id, position, name) for position, name in enumerate(node_names)],
+                        [
+                            (
+                                run_id,
+                                tenant_id,
+                                position,
+                                step["node_id"],
+                                step["depends_on"],
+                                step["max_retries"],
+                            )
+                            for position, step in enumerate(steps)
+                        ],
                     )
                 return self._load(connection, tenant_id, run_id), True
             existing = connection.execute(
@@ -266,10 +305,27 @@ class PostgresRunStore:
             return self._load(connection, tenant_id, run_id)
 
     def start(self, tenant_id: str, run_id: str) -> bool:
-        return self._update_run(tenant_id, run_id, "running", "mock execution running")
+        return self._update_run(tenant_id, run_id, "running", "execution running")
 
     def start_step(self, tenant_id: str, run_id: str, position: int) -> bool:
-        return self._update_step(tenant_id, run_id, position, "running")
+        with self.pool.connection() as connection:
+            self._set_tenant(connection, tenant_id)
+            updated = connection.execute(
+                """
+                UPDATE agent_run_steps AS step
+                SET status = 'running', attempts = attempts + 1, error = ''
+                WHERE step.run_id = %s AND step.tenant_id = %s AND step.position = %s
+                  AND step.status IN ('queued', 'failed')
+                  AND EXISTS (
+                    SELECT 1 FROM agent_runs run
+                    WHERE run.id = step.run_id AND run.tenant_id = step.tenant_id
+                      AND run.cancelled = false
+                  )
+                RETURNING position
+                """,
+                (run_id, tenant_id, position),
+            ).fetchone()
+            return updated is not None
 
     def succeed_step(
         self,
@@ -405,7 +461,8 @@ class PostgresRunStore:
             return None
         steps = connection.execute(
             """
-            SELECT node_id, status, output, error, latency_ms, input_tokens, output_tokens
+            SELECT node_id, depends_on, max_retries, attempts, status, output, error,
+                   latency_ms, input_tokens, output_tokens
             FROM agent_run_steps WHERE run_id = %s AND tenant_id = %s ORDER BY position
             """,
             (run_id, tenant_id),
