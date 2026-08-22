@@ -107,7 +107,7 @@ class EquaxisRuntimeClient:
         body = {
             "task": task,
             "nodes": payload_nodes,
-            "project_id": project_id,
+            "project_id": project_id if self.token else None,
             "idempotency_key": idempotency_key,
         }
         return self._request(
@@ -144,12 +144,12 @@ class EquaxisRuntimeClient:
     ) -> dict[str, Any]:
         headers = {
             "Accept": "application/json",
-            "X-Tenant-Id": tenant_id,
         }
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
-        if project_id:
-            headers["X-Project-Id"] = project_id
+            headers["X-Tenant-Id"] = tenant_id
+            if project_id:
+                headers["X-Project-Id"] = project_id
         if idempotency_key:
             headers["X-Idempotency-Key"] = idempotency_key
         data = json.dumps(body).encode("utf-8") if body is not None else None

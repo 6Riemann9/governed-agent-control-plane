@@ -75,7 +75,17 @@ class RuntimeAdapterTests(unittest.TestCase):
 
         client = EquaxisRuntimeClient("http://host.docker.internal:8000", "")
         with patch("app.runtime.urlopen", return_value=Response()) as open_url:
-            client.get("tenant-id", "project-id", "run-1")
+            client.submit(
+                "tenant-id",
+                "project-id",
+                "smoke",
+                [{"node_id": "plan", "depends_on": [], "max_retries": 0}],
+                "run-key",
+            )
 
         request = open_url.call_args.args[0]
         self.assertIsNone(request.get_header("Authorization"))
+        self.assertIsNone(request.get_header("X-tenant-id"))
+        self.assertIsNone(request.get_header("X-project-id"))
+        body = json.loads(request.data.decode())
+        self.assertIsNone(body["project_id"])
