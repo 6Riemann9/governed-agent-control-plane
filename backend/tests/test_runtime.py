@@ -3,7 +3,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from app.runtime import HttpAgentRuntimeClient
+from app.runtime import EquaxisRuntimeClient, HttpAgentRuntimeClient
 
 
 class RuntimeAdapterTests(unittest.TestCase):
@@ -61,3 +61,21 @@ class RuntimeAdapterTests(unittest.TestCase):
         self.assertEqual(client.base_url, "https://generic.example")
         self.assertEqual(client.token, "generic-token")
         self.assertEqual(client.timeout_seconds, 12)
+
+    def test_equaxis_connector_can_use_local_anonymous_auth(self):
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def read(self):
+                return b'{"run":{"id":"run-1","status":"done"}}'
+
+        client = EquaxisRuntimeClient("http://host.docker.internal:8000", "")
+        with patch("app.runtime.urlopen", return_value=Response()) as open_url:
+            client.get("tenant-id", "project-id", "run-1")
+
+        request = open_url.call_args.args[0]
+        self.assertIsNone(request.get_header("Authorization"))

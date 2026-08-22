@@ -55,6 +55,7 @@ class EquaxisRuntimeClient:
             "EQUAXIS_RUNTIME_TOKEN",
             "EQUAXIS_RUNTIME_TIMEOUT_SECONDS",
             "Equaxis",
+            require_token=False,
         )
 
     @classmethod
@@ -64,6 +65,7 @@ class EquaxisRuntimeClient:
         token_name: str,
         timeout_name: str,
         provider_name: str,
+        require_token: bool = True,
     ) -> "EquaxisRuntimeClient":
         base_url = os.getenv(url_name, "").strip()
         token = os.getenv(token_name, "").strip()
@@ -71,7 +73,7 @@ class EquaxisRuntimeClient:
             raise RuntimeClientError(
                 f"{url_name} is required for the {provider_name} runtime"
             )
-        if not token:
+        if require_token and not token:
             raise RuntimeClientError(
                 f"{token_name} is required for the {provider_name} runtime"
             )
@@ -142,9 +144,10 @@ class EquaxisRuntimeClient:
     ) -> dict[str, Any]:
         headers = {
             "Accept": "application/json",
-            "Authorization": f"Bearer {self.token}",
             "X-Tenant-Id": tenant_id,
         }
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
         if project_id:
             headers["X-Project-Id"] = project_id
         if idempotency_key:
