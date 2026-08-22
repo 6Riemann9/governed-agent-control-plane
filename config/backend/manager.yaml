@@ -29,6 +29,36 @@ spec:
               value: postgres
             - name: EXECUTION_MODE
               value: mock
+            # Set EXECUTION_MODE=agent_http (or equaxis) to delegate to an
+            # already-hosted AgentRun-compatible runtime.
+            - name: AGENT_RUNTIME_URL
+              value: ""
+            - name: AGENT_RUNTIME_TIMEOUT_SECONDS
+              value: "30"
+            - name: AGENT_RUNTIME_RUN_TIMEOUT_SECONDS
+              value: "3600"
+            - name: AGENT_RUNTIME_POLL_SECONDS
+              value: "0.5"
+            - name: AGENT_RUNTIME_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: governed-agent-runtime
+                  key: token
+                  optional: true
+            - name: EQUAXIS_RUNTIME_URL
+              value: ""
+            - name: EQUAXIS_RUNTIME_TIMEOUT_SECONDS
+              value: "30"
+            - name: EQUAXIS_RUNTIME_RUN_TIMEOUT_SECONDS
+              value: "3600"
+            - name: EQUAXIS_RUNTIME_POLL_SECONDS
+              value: "0.5"
+            - name: EQUAXIS_RUNTIME_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: governed-equaxis-runtime
+                  key: token
+                  optional: true
             - name: LLM_BASE_URL
               value: https://xindu.xyz/v1
             - name: LLM_MODEL

@@ -11,6 +11,12 @@ from fastapi import FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.llm import Completion, LLMError, OpenAICompatibleExecutor
+from app.runtime import (
+    AgentRuntimeClient,
+    EquaxisRuntimeClient,
+    HttpAgentRuntimeClient,
+    RuntimeClientError,
+)
 from app.store import InMemoryRunStore, PostgresRunStore
 
 
@@ -66,7 +72,9 @@ def build_executor() -> OpenAICompatibleExecutor | None:
     if mode == "mock":
         return None
     if mode != "live":
-        raise RuntimeError("EXECUTION_MODE must be 'mock' or 'live'")
+        if mode in {"equaxis", "agent_http"}:
+            return None
+        raise RuntimeError("EXECUTION_MODE must be 'mock', 'live', 'equaxis', or 'agent_http'")
     api_key = os.getenv("LLM_API_KEY")
     if not api_key:
         raise LLMError("live execution is enabled but LLM_API_KEY is not configured")
@@ -79,12 +87,37 @@ def build_executor() -> OpenAICompatibleExecutor | None:
     )
 
 
-def execute_run(tenant_id: str, run_id: str, task: str) -> None:
+def build_runtime_client() -> AgentRuntimeClient | None:
+    mode = os.getenv("EXECUTION_MODE", "mock")
+    if mode == "equaxis":
+        return EquaxisRuntimeClient.from_env()
+    if mode == "agent_http":
+        return HttpAgentRuntimeClient.from_env()
+    return None
+
+
+def execute_run(
+    tenant_id: str,
+    run_id: str,
+    task: str,
+    project_id: str | None = None,
+    idempotency_key: str | None = None,
+) -> None:
     time.sleep(0.02)
     if not store.start(tenant_id, run_id):
         return
     run = store.get(tenant_id, run_id)
     if run is None:
+        return
+    if os.getenv("EXECUTION_MODE", "mock") in {"equaxis", "agent_http"}:
+        _execute_external_run(
+            tenant_id,
+            run_id,
+            task,
+            project_id,
+            idempotency_key or run_id,
+            run,
+        )
         return
     try:
         executor = build_executor()
@@ -130,6 +163,118 @@ def execute_run(tenant_id: str, run_id: str, task: str) -> None:
             completed_steps.append(step)
             break
     store.succeed(tenant_id, run_id)
+
+
+def _execute_external_run(
+    tenant_id: str,
+    run_id: str,
+    task: str,
+    project_id: str | None,
+    idempotency_key: str,
+    run: dict[str, Any],
+) -> None:
+    try:
+        runtime = build_runtime_client()
+        if runtime is None:
+            raise RuntimeClientError("external agent runtime adapter is not configured")
+        external = runtime.submit(
+            tenant_id,
+            project_id,
+            task,
+            run["steps"],
+            idempotency_key,
+        )
+        external_id = str(external.get("id") or "")
+        if not external_id:
+            raise RuntimeClientError("external agent runtime response did not include a run id")
+        if not store.set_runtime_run_id(tenant_id, run_id, external_id):
+            return
+        prefix = "EQUAXIS" if os.getenv("EXECUTION_MODE") == "equaxis" else "AGENT_RUNTIME"
+        timeout = _runtime_float(f"{prefix}_RUN_TIMEOUT_SECONDS", 3600.0)
+        interval = _runtime_float(f"{prefix}_POLL_SECONDS", 0.5)
+        deadline = time.monotonic() + timeout
+        snapshot = external
+        while True:
+            _sync_external_steps(tenant_id, run_id, snapshot)
+            status_name = _normalize_runtime_status(snapshot.get("status"))
+            if status_name in {"succeeded", "failed", "cancelled"}:
+                if status_name == "succeeded":
+                    store.succeed(tenant_id, run_id)
+                elif status_name == "cancelled":
+                    store.cancel(tenant_id, run_id)
+                else:
+                    store.fail(
+                        tenant_id,
+                        run_id,
+                        str(snapshot.get("summary") or "external agent runtime failed"),
+                    )
+                return
+            if time.monotonic() >= deadline:
+                try:
+                    runtime.cancel(tenant_id, project_id, external_id)
+                except RuntimeClientError:
+                    pass
+                store.fail(tenant_id, run_id, "external agent runtime polling timed out")
+                return
+            time.sleep(interval)
+            snapshot = runtime.get(tenant_id, project_id, external_id)
+    except RuntimeClientError as error:
+        store.fail(tenant_id, run_id, str(error))
+
+
+def _runtime_float(name: str, default: float) -> float:
+    try:
+        return max(0.01, float(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+def _normalize_runtime_status(value: Any) -> str:
+    status_name = str(value or "queued").lower()
+    return {
+        "done": "succeeded",
+        "success": "succeeded",
+        "successful": "succeeded",
+        "complete": "succeeded",
+        "completed": "succeeded",
+        "error": "failed",
+    }.get(status_name, status_name)
+
+
+def _sync_external_steps(tenant_id: str, run_id: str, snapshot: dict[str, Any]) -> None:
+    local = store.get(tenant_id, run_id)
+    if local is None:
+        return
+    positions = {step["node_id"]: position for position, step in enumerate(local["steps"])}
+    for external_step in snapshot.get("steps", []):
+        if not isinstance(external_step, dict):
+            continue
+        node_id = external_step.get("node_id") or external_step.get("name")
+        position = positions.get(node_id)
+        if position is None:
+            continue
+        external_status = _normalize_runtime_status(external_step.get("status"))
+        current = local["steps"][position]["status"]
+        if external_status in {"running", "succeeded", "failed"} and current == "queued":
+            if not store.start_step(tenant_id, run_id, position):
+                continue
+        if external_status == "succeeded":
+            store.succeed_step(
+                tenant_id,
+                run_id,
+                position,
+                external_step.get("output") or external_step.get("result") or "",
+                int(external_step.get("latency_ms") or 0),
+                int(external_step.get("input_tokens") or 0),
+                int(external_step.get("output_tokens") or 0),
+            )
+        elif external_status == "failed":
+            store.fail_step(
+                tenant_id,
+                run_id,
+                position,
+                str(external_step.get("error") or "external agent runtime step failed"),
+            )
 
 
 def _topological_order(steps: list[dict[str, Any]]) -> list[int] | None:
@@ -194,6 +339,8 @@ async def submit_run(
     step_specs = [
         {
             "node_id": node.name,
+            "prompt": node.prompt,
+            "role": node.role or "",
             "depends_on": node.dependsOn,
             "max_retries": node.maxRetries or 0,
             "model": node.model,
@@ -214,7 +361,11 @@ async def submit_run(
         step_specs,
     )
     if created:
-        Thread(target=execute_run, args=(tenant, run["id"], request.task), daemon=True).start()
+        Thread(
+            target=execute_run,
+            args=(tenant, run["id"], request.task, request.project_id, request.idempotency_key),
+            daemon=True,
+        ).start()
     return {"run": run}
 
 
@@ -234,7 +385,19 @@ async def cancel_run(
     run_id: str,
     tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
 ) -> dict[str, Any]:
-    run = store.cancel(require_tenant(tenant_id), run_id)
+    tenant = require_tenant(tenant_id)
+    runtime_run_id = store.runtime_run_id(tenant, run_id)
+    project_id = store.project_id(tenant, run_id)
+    run = store.cancel(tenant, run_id)
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run not found")
+    if runtime_run_id and os.getenv("EXECUTION_MODE", "mock") in {"equaxis", "agent_http"}:
+        try:
+            runtime = build_runtime_client()
+            if runtime is not None:
+                runtime.cancel(tenant, project_id, runtime_run_id)
+        except RuntimeClientError:
+            # The local durable ledger is already cancelled; the poller will
+            # stop applying external snapshots. Avoid leaking provider details.
+            pass
     return {"run": run}

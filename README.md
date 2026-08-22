@@ -99,6 +99,37 @@ Namespace. `Agent.spec.projectId` must belong to that tenant. The HTTP adapter
 sends both values as control-plane headers and uses the CR UID as the default
 idempotency key; FastAPI independently verifies membership and project tenancy.
 
+## External Agent connectors
+
+This API is an Agent connector, not an Agent factory. It does not create roles,
+prompts, tools, or a second runtime. In `equaxis` mode it delegates to the
+existing Equaxis `/api/agent-runs` endpoint, which owns `product-bridge` and
+`subagent-runtime`.
+
+For another hosted Agent, use `agent_http`. The service implements the
+normalized AgentRun contract: `POST /api/agent-runs`, `GET
+/api/agent-runs/{id}`, and `POST /api/agent-runs/{id}/cancel`, returning a
+`run` object with `id`, `status`, and per-node `steps`. The connector forwards
+tenant, project, bearer-token, idempotency, DAG dependency, role, prompt, model,
+and retry metadata; the external service remains responsible for execution.
+
+Configure it without putting the token in a manifest:
+
+```powershell
+kubectl -n agent-control-system create secret generic governed-agent-runtime `
+  --from-literal=token=$agentToken `
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n agent-control-system set env deployment/agent-control-api `
+  EXECUTION_MODE=agent_http `
+  AGENT_RUNTIME_URL=https://your-agent-service.example
+```
+
+For the existing Equaxis runtime, use `governed-equaxis-runtime` and set
+`EXECUTION_MODE=equaxis`, `EQUAXIS_RUNTIME_URL`, and
+`EQUAXIS_RUNTIME_TOKEN`. The local durable ledger stores the external run ID,
+mirrors step snapshots, and forwards cancellation; it never embeds the runtime
+process.
+
 ## Helm deployment
 
 `charts/governed-agent-operator/` packages the Operator as an installable chart with

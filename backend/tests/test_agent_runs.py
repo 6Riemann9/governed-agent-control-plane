@@ -132,6 +132,50 @@ class AgentRunApiTests(unittest.TestCase):
         self.assertEqual(run["status"], "succeeded")
         self.assertEqual(seen, [("deepseek-v4-flash", 77)])
 
+    def test_equaxis_runtime_mode_delegates_execution_and_persists_result(self):
+        class ExistingEquaxisRuntime:
+            def __init__(self):
+                self.submitted = None
+
+            def submit(self, tenant_id, project_id, task, nodes, idempotency_key):
+                self.submitted = (tenant_id, project_id, task, nodes, idempotency_key)
+                return {"id": "equaxis-run-1", "status": "queued", "steps": []}
+
+            def get(self, tenant_id, project_id, runtime_run_id):
+                return {
+                    "id": runtime_run_id,
+                    "status": "done",
+                    "summary": "existing runtime completed",
+                    "steps": [
+                        {
+                            "node_id": "draft",
+                            "status": "succeeded",
+                            "output": "existing runtime output",
+                            "latency_ms": 41,
+                        }
+                    ],
+                }
+
+            def cancel(self, tenant_id, project_id, runtime_run_id):
+                return {"id": runtime_run_id, "status": "cancelled"}
+
+        runtime = ExistingEquaxisRuntime()
+        with patch.dict("os.environ", {"EXECUTION_MODE": "equaxis"}), patch(
+            "app.main.build_runtime_client", return_value=runtime
+        ):
+            response = self._submit(
+                key="equaxis-delegation",
+                nodes=[{"name": "draft", "prompt": "write the draft", "role": "writer"}],
+            )
+            run = self._wait_for_terminal(response.json()["run"]["id"])
+
+        self.assertEqual(run["status"], "succeeded")
+        self.assertEqual(run["steps"][0]["output"], "existing runtime output")
+        self.assertEqual(runtime.submitted[0], "tenant-a")
+        self.assertEqual(runtime.submitted[1], "project-a")
+        self.assertEqual(runtime.submitted[3][0]["prompt"], "write the draft")
+        self.assertEqual(runtime.submitted[3][0]["role"], "writer")
+
     def _wait_for_terminal(self, run_id):
         deadline = time.monotonic() + 1
         while time.monotonic() < deadline:

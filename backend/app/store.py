@@ -19,12 +19,22 @@ def _normalize_step_specs(step_specs: list[str | dict[str, Any]]) -> list[dict[s
     for spec in step_specs:
         if isinstance(spec, str):
             normalized.append(
-                {"node_id": spec, "depends_on": [], "max_retries": 0}
+                {
+                    "node_id": spec,
+                    "prompt": "",
+                    "role": "",
+                    "depends_on": [],
+                    "max_retries": 0,
+                    "model": "",
+                    "max_tokens": 0,
+                }
             )
             continue
         normalized.append(
             {
                 "node_id": spec["node_id"],
+                "prompt": spec.get("prompt") or "",
+                "role": spec.get("role") or "",
                 "depends_on": list(spec.get("depends_on", [])),
                 "max_retries": int(spec.get("max_retries", 0)),
                 "model": spec.get("model") or "",
@@ -38,7 +48,7 @@ def _snapshot(record: dict[str, Any]) -> dict[str, Any]:
     return {
         key: [dict(step) for step in value] if key == "steps" else value
         for key, value in record.items()
-        if key not in {"tenant_id", "project_id", "task", "cancelled"}
+        if key not in {"tenant_id", "project_id", "task", "cancelled", "runtime_run_id"}
     }
 
 
@@ -79,9 +89,12 @@ class InMemoryRunStore:
                 "created_at": None,
                 "finished_at": None,
                 "cancelled": False,
+                "runtime_run_id": None,
                 "steps": [
                     {
                         "node_id": step["node_id"],
+                        "prompt": step["prompt"],
+                        "role": step["role"],
                         "depends_on": step["depends_on"],
                         "max_retries": step["max_retries"],
                         "model": step["model"],
@@ -105,6 +118,28 @@ class InMemoryRunStore:
         with self._lock:
             record = self._runs.get(run_id)
             return _snapshot(record) if record and record["tenant_id"] == tenant_id else None
+
+    def runtime_run_id(self, tenant_id: str, run_id: str) -> str | None:
+        with self._lock:
+            record = self._runs.get(run_id)
+            if not record or record["tenant_id"] != tenant_id:
+                return None
+            return record.get("runtime_run_id")
+
+    def project_id(self, tenant_id: str, run_id: str) -> str | None:
+        with self._lock:
+            record = self._runs.get(run_id)
+            if not record or record["tenant_id"] != tenant_id:
+                return None
+            return record.get("project_id")
+
+    def set_runtime_run_id(self, tenant_id: str, run_id: str, runtime_run_id: str) -> bool:
+        with self._lock:
+            record = self._runs.get(run_id)
+            if not record or record["tenant_id"] != tenant_id or record["cancelled"]:
+                return False
+            record["runtime_run_id"] = runtime_run_id
+            return True
 
     def cancel(self, tenant_id: str, run_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -259,9 +294,9 @@ class PostgresRunStore:
                     cursor.executemany(
                         """
                         INSERT INTO agent_run_steps
-                            (run_id, tenant_id, position, node_id, depends_on, max_retries,
-                             model, max_tokens, status)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'queued')
+                            (run_id, tenant_id, position, node_id, prompt, role, depends_on,
+                             max_retries, model, max_tokens, status)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'queued')
                         """,
                         [
                             (
@@ -269,6 +304,8 @@ class PostgresRunStore:
                                 tenant_id,
                                 position,
                                 step["node_id"],
+                                step["prompt"],
+                                step["role"],
                                 step["depends_on"],
                                 step["max_retries"],
                                 step["model"],
@@ -288,6 +325,37 @@ class PostgresRunStore:
         with self.pool.connection() as connection:
             self._set_tenant(connection, tenant_id)
             return self._load(connection, tenant_id, run_id)
+
+    def runtime_run_id(self, tenant_id: str, run_id: str) -> str | None:
+        with self.pool.connection() as connection:
+            self._set_tenant(connection, tenant_id)
+            record = connection.execute(
+                "SELECT runtime_run_id FROM agent_runs WHERE id = %s AND tenant_id = %s",
+                (run_id, tenant_id),
+            ).fetchone()
+            return str(record["runtime_run_id"]) if record and record["runtime_run_id"] else None
+
+    def project_id(self, tenant_id: str, run_id: str) -> str | None:
+        with self.pool.connection() as connection:
+            self._set_tenant(connection, tenant_id)
+            record = connection.execute(
+                "SELECT project_id FROM agent_runs WHERE id = %s AND tenant_id = %s",
+                (run_id, tenant_id),
+            ).fetchone()
+            return str(record["project_id"]) if record and record["project_id"] else None
+
+    def set_runtime_run_id(self, tenant_id: str, run_id: str, runtime_run_id: str) -> bool:
+        with self.pool.connection() as connection:
+            self._set_tenant(connection, tenant_id)
+            updated = connection.execute(
+                """
+                UPDATE agent_runs SET runtime_run_id = %s
+                WHERE id = %s AND tenant_id = %s AND cancelled = false
+                RETURNING id
+                """,
+                (runtime_run_id, run_id, tenant_id),
+            ).fetchone()
+            return updated is not None
 
     def cancel(self, tenant_id: str, run_id: str) -> dict[str, Any] | None:
         with self.pool.connection() as connection:
@@ -468,7 +536,7 @@ class PostgresRunStore:
             return None
         steps = connection.execute(
             """
-            SELECT node_id, depends_on, max_retries, model, max_tokens, attempts, status,
+            SELECT node_id, prompt, role, depends_on, max_retries, model, max_tokens, attempts, status,
                    output, error, latency_ms, input_tokens, output_tokens
             FROM agent_run_steps WHERE run_id = %s AND tenant_id = %s ORDER BY position
             """,
