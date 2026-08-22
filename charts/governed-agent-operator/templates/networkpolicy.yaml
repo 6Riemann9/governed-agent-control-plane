@@ -47,5 +47,15 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.networkPolicy.backend.port }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.apiServer.namespace | quote }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.apiServer.selector | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicy.apiServer.port }}
 {{- end }}
 

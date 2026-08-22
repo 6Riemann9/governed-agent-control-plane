@@ -27,6 +27,8 @@ def _normalize_step_specs(step_specs: list[str | dict[str, Any]]) -> list[dict[s
                 "node_id": spec["node_id"],
                 "depends_on": list(spec.get("depends_on", [])),
                 "max_retries": int(spec.get("max_retries", 0)),
+                "model": spec.get("model") or "",
+                "max_tokens": int(spec.get("max_tokens", 0)),
             }
         )
     return normalized
@@ -82,6 +84,8 @@ class InMemoryRunStore:
                         "node_id": step["node_id"],
                         "depends_on": step["depends_on"],
                         "max_retries": step["max_retries"],
+                        "model": step["model"],
+                        "max_tokens": step["max_tokens"],
                         "attempts": 0,
                         "status": "queued",
                         "output": "",
@@ -255,8 +259,9 @@ class PostgresRunStore:
                     cursor.executemany(
                         """
                         INSERT INTO agent_run_steps
-                            (run_id, tenant_id, position, node_id, depends_on, max_retries, status)
-                        VALUES (%s, %s, %s, %s, %s, %s, 'queued')
+                            (run_id, tenant_id, position, node_id, depends_on, max_retries,
+                             model, max_tokens, status)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'queued')
                         """,
                         [
                             (
@@ -266,6 +271,8 @@ class PostgresRunStore:
                                 step["node_id"],
                                 step["depends_on"],
                                 step["max_retries"],
+                                step["model"],
+                                step["max_tokens"],
                             )
                             for position, step in enumerate(steps)
                         ],
@@ -461,8 +468,8 @@ class PostgresRunStore:
             return None
         steps = connection.execute(
             """
-            SELECT node_id, depends_on, max_retries, attempts, status, output, error,
-                   latency_ms, input_tokens, output_tokens
+            SELECT node_id, depends_on, max_retries, model, max_tokens, attempts, status,
+                   output, error, latency_ms, input_tokens, output_tokens
             FROM agent_run_steps WHERE run_id = %s AND tenant_id = %s ORDER BY position
             """,
             (run_id, tenant_id),

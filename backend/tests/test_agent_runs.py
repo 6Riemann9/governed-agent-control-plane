@@ -114,6 +114,24 @@ class AgentRunApiTests(unittest.TestCase):
         self.assertEqual(run["steps"][0]["attempts"], 2)
         self.assertEqual(run["steps"][0]["output"], "recovered")
 
+    def test_node_model_and_token_budget_reach_executor(self):
+        seen = []
+
+        class RecordingExecutor:
+            def complete(self, task, node_name, prior_output, model=None, max_tokens=None):
+                seen.append((model, max_tokens))
+                return Completion("configured", 1, 1)
+
+        with patch("app.main.build_executor", return_value=RecordingExecutor()):
+            response = self._submit(
+                key="model-projection",
+                nodes=[{"name": "draft", "model": "deepseek-v4-flash", "maxTokens": 77}],
+            )
+            run = self._wait_for_terminal(response.json()["run"]["id"])
+
+        self.assertEqual(run["status"], "succeeded")
+        self.assertEqual(seen, [("deepseek-v4-flash", 77)])
+
     def _wait_for_terminal(self, run_id):
         deadline = time.monotonic() + 1
         while time.monotonic() < deadline:

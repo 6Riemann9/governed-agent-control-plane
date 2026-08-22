@@ -31,12 +31,19 @@ class OpenAICompatibleExecutor:
         self.max_tokens = max_tokens
         self.timeout_seconds = timeout_seconds
 
-    def complete(self, task: str, node_name: str, prior_output: str) -> Completion:
+    def complete(
+        self,
+        task: str,
+        node_name: str,
+        prior_output: str,
+        model: str | None = None,
+        max_tokens: int | None = None,
+    ) -> Completion:
         context = prior_output[-4_000:] if prior_output else "(no prior node output)"
         payload = {
-            "model": self.model,
+            "model": model or self.model,
             "temperature": 0.2,
-            "max_tokens": self.max_tokens,
+            "max_tokens": max_tokens or self.max_tokens,
             "messages": [
                 {
                     "role": "system",

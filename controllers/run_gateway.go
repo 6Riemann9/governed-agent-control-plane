@@ -34,6 +34,7 @@ type RunNode struct {
 	Prompt     string   `json:"prompt"`
 	Role       string   `json:"role,omitempty"`
 	Model      string   `json:"model,omitempty"`
+	MaxTokens  int      `json:"maxTokens,omitempty"`
 	DependsOn  []string `json:"dependsOn,omitempty"`
 	MaxRetries *int     `json:"maxRetries,omitempty"`
 }

@@ -72,7 +72,13 @@ The API records each node's output, latency, input tokens and output tokens in
 PostgreSQL. Provider errors are stored as compact status messages and never
 include the API key or raw provider response body. DAG dependencies are validated
 at the API boundary and executed topologically; each node honors its retry
-budget. To return to safe mock mode, apply `kubectl apply -k config/default`.
+budget. The Agent model and max-token budget are projected into each durable
+node record and sent to the provider. To return to safe mock mode, apply
+`kubectl apply -k config/default`.
+
+The default-deny operator NetworkPolicy permits DNS, the API service, and the
+Kubernetes API Server (`kube-system/component=kube-apiserver` on local clusters).
+Override that selector for clusters whose API Server is external to the cluster.
 
 ## PoC deployment
 

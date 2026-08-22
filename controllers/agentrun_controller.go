@@ -180,6 +180,7 @@ func (r *AgentRunReconciler) reconcileSubmit(
 				Prompt:    prompt,
 				Role:      node.Role,
 				Model:     agent.Spec.Model.Model,
+				MaxTokens: agent.Spec.Model.MaxTokens,
 				DependsOn: node.DependsOn,
 			}
 			if projected.Role == "" {
@@ -196,6 +197,7 @@ func (r *AgentRunReconciler) reconcileSubmit(
 		nodes = append(nodes, RunNode{
 			Name: "main", Prompt: run.Spec.Input.Task,
 			Role: agent.Spec.Runtime.Role, Model: agent.Spec.Model.Model,
+			MaxTokens: agent.Spec.Model.MaxTokens,
 		})
 	}
 	controlRun, err := r.Gateway.Submit(ctx, RunSubmission{

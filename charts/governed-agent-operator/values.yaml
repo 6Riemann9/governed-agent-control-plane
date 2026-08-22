@@ -55,6 +55,11 @@ networkPolicy:
     selector:
       app.kubernetes.io/name: agent-control-api
     port: 8000
+  apiServer:
+    namespace: kube-system
+    selector:
+      component: kube-apiserver
+    port: 6443
 
 podAnnotations: {}
 podLabels: {}

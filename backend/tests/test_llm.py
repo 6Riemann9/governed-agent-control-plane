@@ -33,6 +33,22 @@ class OpenAICompatibleExecutorTests(unittest.TestCase):
         self.assertNotIn("test-key", request.data.decode())
 
     @patch("app.llm.urlopen")
+    def test_allows_per_node_model_and_token_budget_override(self, urlopen):
+        response = MagicMock()
+        response.read.return_value = json.dumps(
+            {"choices": [{"message": {"content": "configured"}}]}
+        ).encode()
+        urlopen.return_value.__enter__.return_value = response
+
+        self.executor.complete(
+            "test task", "draft", "", model="tenant-model", max_tokens=77
+        )
+
+        payload = json.loads(urlopen.call_args.args[0].data.decode())
+        self.assertEqual(payload["model"], "tenant-model")
+        self.assertEqual(payload["max_tokens"], 77)
+
+    @patch("app.llm.urlopen")
     def test_redacts_provider_error_body(self, urlopen):
         error = HTTPError("https://xindu.xyz/v1/chat/completions", 401, "Unauthorized", {}, None)
         urlopen.side_effect = error

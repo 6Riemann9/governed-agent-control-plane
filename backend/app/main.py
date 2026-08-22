@@ -19,6 +19,7 @@ class RunNode(BaseModel):
     prompt: str = ""
     role: str | None = None
     model: str | None = None
+    maxTokens: int | None = Field(default=None, ge=1, le=32768)
     dependsOn: list[str] = Field(default_factory=list)
     maxRetries: int | None = Field(default=None, ge=0, le=5)
 
@@ -105,7 +106,7 @@ def execute_run(tenant_id: str, run_id: str, task: str) -> None:
             attempts += 1
             started = time.monotonic()
             try:
-                completion = _complete(executor, task, step["node_id"], completed_steps)
+                completion = _complete(executor, task, step, completed_steps)
             except LLMError as error:
                 store.fail_step(tenant_id, run_id, position, str(error))
                 if attempts <= max_retries:
@@ -163,14 +164,20 @@ def _topological_order(steps: list[dict[str, Any]]) -> list[int] | None:
 def _complete(
     executor: OpenAICompatibleExecutor | None,
     task: str,
-    node_name: str,
+    step: dict[str, Any],
     completed_steps: list[dict[str, Any]],
 ) -> Completion:
+    node_name = step["node_id"]
     if executor is None:
         time.sleep(0.02)
         return Completion(f"mock execution completed step {node_name}", 0, 0)
     prior_output = "\n\n".join(step["output"] for step in completed_steps if step["output"])
-    return executor.complete(task, node_name, prior_output)
+    options = {}
+    if step.get("model"):
+        options["model"] = step["model"]
+    if step.get("max_tokens"):
+        options["max_tokens"] = step["max_tokens"]
+    return executor.complete(task, node_name, prior_output, **options)
 
 
 @app.get("/health")
@@ -189,6 +196,8 @@ async def submit_run(
             "node_id": node.name,
             "depends_on": node.dependsOn,
             "max_retries": node.maxRetries or 0,
+            "model": node.model,
+            "max_tokens": node.maxTokens or 0,
         }
         for node in request.nodes
     ] or [{"node_id": "run", "depends_on": [], "max_retries": 0}]
